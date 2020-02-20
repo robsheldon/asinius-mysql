@@ -462,7 +462,7 @@ class Connection implements \Asinius\Datastream
                 }
                 throw new \RuntimeException("Database connection is not ready");
             }
-            $pdo_statemnt = $this->_pdo->prepare($statement);
+            $pdo_statement = $this->_pdo->prepare($statement);
             $pdo_statement->execute($arguments);
             $this->_check_result($this->_pdo_statement);
             //  fetch() or fetchAll() can't be called on update(), insert(), etc.
