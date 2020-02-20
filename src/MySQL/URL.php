@@ -75,11 +75,15 @@ class URL
         if ( empty($url->hostname) ) {
             $url->hostname = 'localhost';
         }
-        $dsn = sprintf('mysql:dbname=%s;host=%s', ltrim('/', $url->path), $url->hostname);
+        $dsn = sprintf('mysql:dbname=%s;host=%s', ltrim($url->path, '/'), $url->hostname);
         if ( ! empty($url->port) ) {
             $dsn .= ';port=' . $url->port;
         }
-        var_dump($dsn);
+        $mysql = new Connection($dsn, $url->username, $url->password);
+        //  This function gets called by \Asinius\URL::open(), so open the
+        //  Datastream here before returning it.
+        $mysql->open();
+        return $mysql;
     }
 
 

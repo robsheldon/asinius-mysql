@@ -70,7 +70,7 @@ class Connection implements \Asinius\Datastream
     /**
      * Return a new MySQL Connection object.
      */
-    public function __construct ()
+    public function __construct ($dsn)
     {
         $arguments = func_get_args();
         if ( count($arguments) < 1 || count($arguments) > 4 ) {
@@ -302,11 +302,22 @@ class Connection implements \Asinius\Datastream
 
 
     /**
-     * Return any messages stored in the log.
+     * Return any errors stored in the log.
      *
      * @return  array
      */
     public function errors ()
+    {
+        return preg_grep('/^MySQL ERROR/', $this->_log);
+    }
+
+
+    /**
+     * Return any messages stored in the log.
+     *
+     * @return  array
+     */
+    public function log ()
     {
         return $this->_log;
     }
@@ -335,7 +346,7 @@ class Connection implements \Asinius\Datastream
      *
      * @return  void
      */
-    public function search ()
+    public function search ($query_string)
     {
         //  Accepts variable arguments; first arg is always the query string, rest are values to use.
         $statement_and_args = $this->_parse_statement_arguments(func_get_args());
@@ -436,7 +447,7 @@ class Connection implements \Asinius\Datastream
      *
      * @return  mixed
      */
-    public function write ()
+    public function write ($statement)
     {
         //  Accepts variable arguments; first arg is always the query string, rest are values to use.
         $statement_and_args = $this->_parse_statement_arguments(func_get_args());
