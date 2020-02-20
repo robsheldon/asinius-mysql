@@ -1,0 +1,17 @@
+{
+    "name": "asinius/mysql",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^7.0",
+        "asinius/asinius": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Asinius\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}
