@@ -198,7 +198,7 @@ class Connection implements \Asinius\Datastream
      */
     protected function _log_statement ($statement, $parameters)
     {
-        $this->_log[] = implode(' ', [date('c'), 'SQL:', \Asinius\Functions::escape_str($statement), '<<', \Asinius\Functions::to_str($parameters)]);
+        $this->_log(implode(' ', [date('c'), 'SQL:', \Asinius\Functions::escape_str($statement), '<<', \Asinius\Functions::to_str($parameters)]));
     }
 
 
