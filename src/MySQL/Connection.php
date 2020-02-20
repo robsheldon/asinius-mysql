@@ -92,8 +92,10 @@ class Connection implements \Asinius\Datastream
 
 
     /**
-     * The only special property currently supported is throw_on_error. If it's
-     * set to false, database query errors will not throw an exception.
+     * Special properties currently supported:
+     * 
+     * throw_on_error: Set to false to prevent exceptions on database query errors.
+     * log_limit: Limit log to this many statements.
      * 
      * @param   string      $property
      */
@@ -160,6 +162,14 @@ class Connection implements \Asinius\Datastream
     {
         if ( is_null($destination) ) {
             $this->_log[] = $line;
+            if ( array_key_exists('log_limit', $this->_properties) && is_int($this->_properties['log_limit']) ) {
+                if ( $this->_properties['log_limit'] < 1 ) {
+                    $this->_log = [];
+                }
+                else {
+                    array_splice($this->_log, 0, count($this->_log) - $this->_properties['log_limit']);
+                }
+            }
             $destinations = $this->_log_interfaces;
         }
         else {
