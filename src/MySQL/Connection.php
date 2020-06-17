@@ -212,15 +212,23 @@ class Connection implements \Asinius\Datastream
      */
     protected function _parse_statement_arguments ($arguments)
     {
-        if ( count($arguments) == 0 ) {
-            return [];
-        }
         $statement = array_shift($arguments);
         //  Allow statement parameters to be passed as an array in a single argument.
         if ( count($arguments) == 1 && is_array($arguments[0]) ) {
-            return [$statement => $arguments[0]];
+            $arguments = $arguments[0];
         }
-        return [$statement => $arguments];
+        //  Expand nested array arguments (for those 'WHERE...IN...' statements).
+        $expanded = [];
+        $n = count($arguments);
+        while ( $n-- ) {
+            if ( is_array($arguments[$n]) ) {
+                $expanded = array_merge($arguments[$n], $expanded);
+            }
+            else {
+                array_unshift($expanded, $arguments[$n]);
+            }
+        }
+        return [$statement, $expanded];
     }
 
 
@@ -359,34 +367,35 @@ class Connection implements \Asinius\Datastream
     public function search ($query_string)
     {
         //  Accepts variable arguments; first arg is always the query string, rest are values to use.
-        $statement_and_args = $this->_parse_statement_arguments(func_get_args());
-        foreach ($statement_and_args as $statement => $arguments) {
-            if ( $this->_last_statement == $statement && $this->_last_arguments === $arguments ) {
-                continue;
-            }
-            //  New query.
-            $this->_log_statement($statement, $arguments);
-            if ( ! $this->ready() ) {
-                if ( is_null($this->_pdo) ) {
-                    throw new \RuntimeException("Not connected to database");
-                }
-                if ( $this->_state !== \Asinius\Datastream::STATUS_READY ) {
-                    throw new \RuntimeException("Database connection not ready: closed or in error");
-                }
-                throw new \RuntimeException("Database connection is not ready");
-            }
-            $this->_last_statement = $statement;
-            $this->_last_arguments = $arguments;
-            $this->_pdo_results    = [];
-            $this->_pdo_result_idx = 0;
-            $this->_pdo_statement  = $this->_pdo->prepare($statement);
-            $this->_pdo_statement->execute($arguments);
-            $this->_check_result($this->_pdo_statement);
-            //  Preload the first row of the result so that questions like
-            //  empty() and peek() can be answered.
-            $this->_pdo_results[] = $this->_pdo_statement->fetch(\PDO::FETCH_ASSOC);
+        $arguments = func_get_args();
+        if ( count($arguments) == 0 ) {
+            throw new \RuntimeException('No arguments?');
+        }
+        list($statement, $arguments) = $this->_parse_statement_arguments($arguments);
+        if ( $this->_last_statement == $statement && $this->_last_arguments === $arguments ) {
             return;
         }
+        //  New query.
+        $this->_log_statement($statement, $arguments);
+        if ( ! $this->ready() ) {
+            if ( is_null($this->_pdo) ) {
+                throw new \RuntimeException("Not connected to database");
+            }
+            if ( $this->_state !== \Asinius\Datastream::STATUS_READY ) {
+                throw new \RuntimeException("Database connection not ready: closed or in error");
+            }
+            throw new \RuntimeException("Database connection is not ready");
+        }
+        $this->_last_statement = $statement;
+        $this->_last_arguments = $arguments;
+        $this->_pdo_results    = [];
+        $this->_pdo_result_idx = 0;
+        $this->_pdo_statement  = $this->_pdo->prepare($statement);
+        $this->_pdo_statement->execute($arguments);
+        $this->_check_result($this->_pdo_statement);
+        //  Preload the first row of the result so that questions like
+        //  empty() and peek() can be answered.
+        $this->_pdo_results[] = $this->_pdo_statement->fetch(\PDO::FETCH_ASSOC);
     }
 
 
@@ -460,32 +469,34 @@ class Connection implements \Asinius\Datastream
     public function write ($statement)
     {
         //  Accepts variable arguments; first arg is always the query string, rest are values to use.
-        $statement_and_args = $this->_parse_statement_arguments(func_get_args());
-        foreach ($statement_and_args as $statement => $arguments) {
-            $this->_log_statement($statement, $arguments);
-            if ( ! $this->ready() ) {
-                if ( is_null($this->_pdo) ) {
-                    throw new \RuntimeException("Not connected to database");
-                }
-                if ( $this->_state !== \Asinius\Datastream::STATUS_READY ) {
-                    throw new \RuntimeException("Database connection not ready: closed or in error");
-                }
-                throw new \RuntimeException("Database connection is not ready");
-            }
-            $pdo_statement = $this->_pdo->prepare($statement);
-            $pdo_statement->execute($arguments);
-            $this->_check_result($this->_pdo_statement);
-            //  fetch() or fetchAll() can't be called on update(), insert(), etc.
-            //  statements, because even if they succeed, they still return an
-            //  error code -- a "general error" code which can't be filtered out
-            //  as an "everything's OK but don't call fetch() on insert()"
-            //  error condition.
-            $command = strtolower(substr($statement, 0, 6));
-            if ( $command != 'insert' && $command != 'update' && $command != 'delete' ) {
-                return $pdo_statement->fetch(\PDO::FETCH_ASSOC);
-            }
-            return true;
+        $arguments = func_get_args();
+        if ( count($arguments) == 0 ) {
+            throw new \RuntimeException('No arguments?');
         }
+        list($statement, $arguments) = $this->_parse_statement_arguments($arguments);
+        $this->_log_statement($statement, $arguments);
+        if ( ! $this->ready() ) {
+            if ( is_null($this->_pdo) ) {
+                throw new \RuntimeException("Not connected to database");
+            }
+            if ( $this->_state !== \Asinius\Datastream::STATUS_READY ) {
+                throw new \RuntimeException("Database connection not ready: closed or in error");
+            }
+            throw new \RuntimeException("Database connection is not ready");
+        }
+        $pdo_statement = $this->_pdo->prepare($statement);
+        $pdo_statement->execute($arguments);
+        $this->_check_result($this->_pdo_statement);
+        //  fetch() or fetchAll() can't be called on update(), insert(), etc.
+        //  statements, because even if they succeed, they still return an
+        //  error code -- a "general error" code which can't be filtered out
+        //  as an "everything's OK but don't call fetch() on insert()"
+        //  error condition.
+        $command = strtolower(substr($statement, 0, 6));
+        if ( $command != 'insert' && $command != 'update' && $command != 'delete' ) {
+            return $pdo_statement->fetch(\PDO::FETCH_ASSOC);
+        }
+        return true;
     }
 
 
