@@ -73,7 +73,7 @@ class Connection implements \Asinius\Datastream
     public function __construct ($dsn)
     {
         $arguments = func_get_args();
-        if ( count($arguments) < 1 || count($arguments) > 4 ) {
+        if ( count($arguments) > 4 ) {
             throw new \RuntimeException("Bad argument count for \" new" . __CLASS__ . "()'\"");
         }
         $this->_pdo_arguments = $arguments;
@@ -361,7 +361,7 @@ class Connection implements \Asinius\Datastream
         //  Accepts variable arguments; first arg is always the query string, rest are values to use.
         $statement_and_args = $this->_parse_statement_arguments(func_get_args());
         foreach ($statement_and_args as $statement => $arguments) {
-            if ( $this->_last_statement == $statement && $this->_last_arguments == $arguments ) {
+            if ( $this->_last_statement == $statement && $this->_last_arguments === $arguments ) {
                 continue;
             }
             //  New query.
