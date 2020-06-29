@@ -65,6 +65,8 @@ class Connection implements \Asinius\Datastream
     protected $_state           = \Asinius\Datastream::STATUS_CLOSED;
     protected $_last_statement  = '';
     protected $_last_arguments  = [];
+    protected $_default_table   = '';
+    protected $_table_columns   = [];
 
 
     /**
@@ -309,13 +311,102 @@ class Connection implements \Asinius\Datastream
 
 
     /**
-     * Return true if the object is not in an error condition, false otherwise.
+     * Returns true if the specified table exists in this database, false otherwise.
+     *
+     * @param   string      $table_name
+     *
+     * @throws  \RuntimeException
      *
      * @return  boolean
      */
-    public function ready ()
+    public function table_exists ($table_name)
     {
-        return ! is_null($this->_pdo) && $this->_state === \Asinius\Datastream::STATUS_READY;
+        if ( ! is_string($table_name) ) {
+            throw new \RuntimeException("\$table_name must be a string type");
+        }
+        $this->ready(true);
+        //  This bypasses all of the nice work done in search() so that a call
+        //  to this function during a search()/read() cycle won't interrupt
+        //  those results.
+        $pdo_statement  = $this->_pdo->prepare('SHOW TABLES LIKE ?');
+        $pdo_statement->execute([$table_name]);
+        $tables = $pdo_statement->fetch(\PDO::FETCH_ASSOC);
+        return $tables !== false;
+    }
+
+
+    /**
+     * Use a specific table by default. Allows for passing simple arrays to
+     * write(), as well as read()ing from the table without a prior search().
+     *
+     * @param   string      $table_name
+     *
+     * @throws  \RuntimeException
+     *
+     * @return  boolean
+     */
+    public function use_table ($table_name)
+    {
+        if ( ! is_string($table_name) ) {
+            throw new \RuntimeException("\$table_name must be a string type");
+        }
+        if ( strlen($table_name) == 0 ) {
+            //  Unset the current table.
+            $this->_default_table = '';
+            $this->_table_columns = [];
+            return true;
+        }
+        $this->ready(true);
+        if ( ! $this->table_exists($table_name) ) {
+            throw new \RuntimeException("Table does not exist in database: $table_name");
+        }
+        //  Load the table definition so that array keys can be associated with
+        //  table columns during write() operations. Like table_exists() above,
+        //  this bypasses the usual search()/read() code path so that in-progress
+        //  operations don't get interrupted.
+        //  Unfortunately parameterized queries don't work here, but since the
+        //  table was verified in table_exists(), it's probably -- usually --
+        //  okay to proceed here.
+        $pdo_statement = $this->_pdo->prepare("DESCRIBE `$table_name`");
+        $pdo_statement->execute([]);
+        $columns = [];
+        while ( ($column = $pdo_statement->fetch(\PDO::FETCH_ASSOC)) !== false ) {
+            $columns[$column['Field']] = ['type' => $column['Type'], 'null' => $column['Null'], 'default' => $column['Default'], 'extra' => $column['Extra']];
+        }
+        $this->_table_columns = $columns;
+        $this->_default_table = $table_name;
+        return true;
+    }
+
+
+    /**
+     * Return true if the object is not in an error condition, false otherwise.
+     * If $throw is set, then this function becomes an assertion, and will
+     * throw() an exception describing the current connection state. This is
+     * mostly for internal use, but feel free to use it too.
+     *
+     * @param   boolean     $throw
+     *
+     * @throws  \RuntimeException
+     *
+     * @return  boolean
+     */
+    public function ready ($throw = false)
+    {
+        $ready = ! is_null($this->_pdo) && $this->_state === \Asinius\Datastream::STATUS_READY;
+        if ( ! $throw ) {
+            return $ready;
+        }
+        if ( ! $ready ) {
+            if ( is_null($this->_pdo) ) {
+                throw new \RuntimeException('Not connected to database');
+            }
+            if ( $this->_state !== \Asinius\Datastream::STATUS_READY ) {
+                throw new \RuntimeException('Database connection not ready: closed or in error');
+            }
+            throw new \RuntimeException('Database connection is not ready');
+        }
+        return true;
     }
 
 
@@ -377,15 +468,7 @@ class Connection implements \Asinius\Datastream
         }
         //  New query.
         $this->_log_statement($statement, $arguments);
-        if ( ! $this->ready() ) {
-            if ( is_null($this->_pdo) ) {
-                throw new \RuntimeException("Not connected to database");
-            }
-            if ( $this->_state !== \Asinius\Datastream::STATUS_READY ) {
-                throw new \RuntimeException("Database connection not ready: closed or in error");
-            }
-            throw new \RuntimeException("Database connection is not ready");
-        }
+        $this->ready(true);
         $this->_last_statement = $statement;
         $this->_last_arguments = $arguments;
         $this->_pdo_results    = [];
@@ -412,11 +495,18 @@ class Connection implements \Asinius\Datastream
 
     /**
      * Return the next row in the result set or false if there are no more rows.
+     * If a default table has been selected with use_table(), then the application
+     * can read() all rows from the table without calling search() first.
+     * WARNING: Doing this could be slooooooooooow.
      *
      * @return  mixed
      */
     public function read ()
     {
+        if ( empty($this->_last_statement) && $this->_default_table != '' ) {
+            $table = $this->_default_table;
+            $this->search("SELECT * FROM `$table`");
+        }
         $value = $this->_pdo_results[$this->_pdo_result_idx];
         if ( $value !== false ) {
             $this->_pdo_results[] = $this->_pdo_statement->fetch(\PDO::FETCH_ASSOC);
@@ -464,26 +554,55 @@ class Connection implements \Asinius\Datastream
      * used for insert, update, delete, etc. statements and will not disrupt
      * any select statement already in progress.
      *
+     * @param   mixed       $statement
+     *
+     * @throws  \RuntimeException
+     *
      * @return  mixed
      */
     public function write ($statement)
     {
-        //  Accepts variable arguments; first arg is always the query string, rest are values to use.
-        $arguments = func_get_args();
-        if ( count($arguments) == 0 ) {
-            throw new \RuntimeException('No arguments?');
+        if ( is_array($statement) && $this->_default_table != '' ) {
+            //  Allow applications to write key-value arrays directly to database
+            //  tables after calling use_table().
+            //  Make sure all required columns are included and then create a
+            //  statement to execute.
+            //  I don't want to allow positional array keys because I think
+            //  that's just asking for trouble later. Applications that insist
+            //  on using positional data can just call array_combine() before
+            //  calling write().
+            foreach ($this->_table_columns as $name => $properties) {
+                if ( strtolower($properties['null']) == 'no' && is_null($properties['default']) && ! array_key_exists($name, $statement) && ! $properties['extra'] == 'auto_increment' ) {
+                    throw new \RuntimeException("Missing required column during write(): $name");
+                }
+            }
+            //  Silently ignore any keys in the data that don't match a column
+            //  in the database. This allows applications to dump a single data
+            //  structure into multiple destinations, including this table.
+            $write_columns = array_intersect_key($statement, $this->_table_columns);
+            //  Now build the insert/update statement.
+            $table = $this->_default_table;
+            $column_names = '`' . implode('`, `', array_keys($write_columns)) . '`';
+            $column_placeholders = implode(', ', array_fill(0, count($write_columns), '?'));
+            $statement = "
+                INSERT `$table` ($column_names)
+                VALUES ($column_placeholders)
+                ON DUPLICATE KEY UPDATE ";
+            $statement .= implode(', ', array_map(function($column){
+                return "`$column` = VALUES(`$column`)";
+            }, array_keys($write_columns)));
+            $arguments = array_values($write_columns);
         }
-        list($statement, $arguments) = $this->_parse_statement_arguments($arguments);
+        else {
+            //  Accept variable arguments; first arg is always the query string, rest are values to use.
+            $arguments = func_get_args();
+            if ( count($arguments) == 0 ) {
+                throw new \RuntimeException('No arguments?');
+            }
+            list($statement, $arguments) = $this->_parse_statement_arguments($arguments);
+        }
         $this->_log_statement($statement, $arguments);
-        if ( ! $this->ready() ) {
-            if ( is_null($this->_pdo) ) {
-                throw new \RuntimeException("Not connected to database");
-            }
-            if ( $this->_state !== \Asinius\Datastream::STATUS_READY ) {
-                throw new \RuntimeException("Database connection not ready: closed or in error");
-            }
-            throw new \RuntimeException("Database connection is not ready");
-        }
+        $this->ready(true);
         $pdo_statement = $this->_pdo->prepare($statement);
         $pdo_statement->execute($arguments);
         $this->_check_result($this->_pdo_statement);

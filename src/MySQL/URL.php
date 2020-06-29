@@ -75,7 +75,9 @@ class URL
         if ( empty($url->hostname) ) {
             $url->hostname = 'localhost';
         }
-        $dsn = sprintf('mysql:dbname=%s;host=%s', ltrim($url->path, '/'), $url->hostname);
+        $dbpath = explode('/', trim($url->path, '/'));
+        $dbname = array_shift($dbpath);
+        $dsn = sprintf('mysql:dbname=%s;host=%s', $dbname, $url->hostname);
         if ( ! empty($url->port) ) {
             $dsn .= ';port=' . $url->port;
         }
@@ -83,6 +85,10 @@ class URL
         //  This function gets called by \Asinius\URL::open(), so open the
         //  Datastream here before returning it.
         $mysql->open();
+        //  If a table name was specified, start using it now.
+        if ( count($dbpath) == 1 ) {
+            $mysql->use_table(array_shift($dbpath));
+        }
         return $mysql;
     }
 
