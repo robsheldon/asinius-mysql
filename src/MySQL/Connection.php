@@ -62,7 +62,7 @@ class Connection implements \Asinius\Datastream
     protected $_pdo_result_idx  = 0;
     protected $_log             = [];
     protected $_log_interfaces  = [];
-    protected $_state           = \Asinius\Datastream::STATUS_CLOSED;
+    protected $_state           = \Asinius\Datastream::STREAM_UNOPENED;
     protected $_last_statement  = '';
     protected $_last_arguments  = [];
     protected $_default_table   = '';
@@ -306,7 +306,7 @@ class Connection implements \Asinius\Datastream
     public function open ()
     {
         $this->_pdo = new \PDO(...$this->_pdo_arguments);
-        $this->_state = \Asinius\Datastream::STATUS_READY;
+        $this->_state = \Asinius\Datastream::STREAM_CONNECTED;
     }
 
 
@@ -393,7 +393,7 @@ class Connection implements \Asinius\Datastream
      */
     public function ready ($throw = false)
     {
-        $ready = ! is_null($this->_pdo) && $this->_state === \Asinius\Datastream::STATUS_READY;
+        $ready = ! is_null($this->_pdo) && $this->_state === \Asinius\Datastream::STREAM_CONNECTED;
         if ( ! $throw ) {
             return $ready;
         }
@@ -401,7 +401,7 @@ class Connection implements \Asinius\Datastream
             if ( is_null($this->_pdo) ) {
                 throw new \RuntimeException('Not connected to database');
             }
-            if ( $this->_state !== \Asinius\Datastream::STATUS_READY ) {
+            if ( $this->_state !== \Asinius\Datastream::STREAM_CONNECTED ) {
                 throw new \RuntimeException('Database connection not ready: closed or in error');
             }
             throw new \RuntimeException('Database connection is not ready');
@@ -630,7 +630,7 @@ class Connection implements \Asinius\Datastream
     {
         $this->_pdo             = null;
         $this->_pdo_statement   = null;
-        $this->_state           = \Asinius\Datastream::STATUS_CLOSED;
+        $this->_state           = \Asinius\Datastream::STREAM_CLOSED;
         $this->reset();
     }
 
