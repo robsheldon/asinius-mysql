@@ -356,6 +356,12 @@ class Connection implements \Asinius\Datastream
             $this->_table_columns = [];
             return true;
         }
+        //  A parameterized query can't be used here so the table name needs to
+        //  be validated. This library enforces a stricter character set for
+        //  table names than MySQL does by default.
+        if ( strspn($table_name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_') !== strlen($table_name) ) {
+            throw new \RuntimeException("Invalid table name: $table_name. Table names can only contain [A-Za-z0-9_]");
+        }
         $this->ready(true);
         if ( ! $this->table_exists($table_name) ) {
             throw new \RuntimeException("Table does not exist in database: $table_name");
