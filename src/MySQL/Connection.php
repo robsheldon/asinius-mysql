@@ -47,6 +47,17 @@ namespace Asinius\MySQL;
 
 /*******************************************************************************
 *                                                                              *
+*   Constants                                                                  *
+*                                                                              *
+*******************************************************************************/
+
+//  This library enforces a stricter character set for table names than MySQL
+//  does by default.
+defined('MYSQL_TABLENAME_CHARS')    or define('MYSQL_TABLENAME_CHARS', 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_');
+
+
+/*******************************************************************************
+*                                                                              *
 *   \Asinius\MySQL\Connection                                                  *
 *                                                                              *
 *******************************************************************************/
@@ -54,19 +65,19 @@ namespace Asinius\MySQL;
 class Connection implements \Asinius\Datastream
 {
 
-    protected $_properties      = [];
-    protected $_pdo             = null;
-    protected $_pdo_arguments   = [];
-    protected $_pdo_statement   = null;
-    protected $_pdo_results     = [];
-    protected $_pdo_result_idx  = 0;
-    protected $_log             = [];
-    protected $_log_interfaces  = [];
-    protected $_state           = \Asinius\Datastream::STREAM_UNOPENED;
-    protected $_last_statement  = '';
-    protected $_last_arguments  = [];
-    protected $_default_table   = '';
-    protected $_table_columns   = [];
+    protected $_properties          = [];
+    protected $_pdo                 = null;
+    protected $_pdo_arguments       = [];
+    protected $_pdo_statement       = null;
+    protected $_pdo_results         = [];
+    protected $_pdo_result_idx      = 0;
+    protected $_log                 = [];
+    protected $_log_interfaces      = [];
+    protected $_state               = \Asinius\Datastream::STREAM_UNOPENED;
+    protected $_last_statement      = '';
+    protected $_last_arguments      = [];
+    protected $_default_table       = '';
+    protected $_table_definitions   = [];
 
 
     /**
@@ -251,12 +262,10 @@ class Connection implements \Asinius\Datastream
             if ( $error_info[0] != '00000' && ! ($error_info[0] == 'HY000' && empty($error_info[1])) ) {
                 $error_string = 'MySQL ERROR ' . $error_info[0] . ' (' . $error_info[1] . '): ' . $error_info[2];
                 if ( ! array_key_exists('throw_on_error', $this->_properties) || $this->_properties['throw_on_error'] !== false ) {
-                    /* 
-                        By default, if a query fails with an error from the database
-                        engine, it will throw() here. You can disable that behavior
-                        by setting "->throw_on_error = false", but beware, doing
-                        so will eventually cause much wailing and gnashing of teeth.
-                    */
+                    //  By default, if a query fails with an error from the database
+                    //  engine, it will throw() here. You can disable that behavior
+                    //  by setting "->throw_on_error = false", but beware, doing
+                    //  so will eventually cause much wailing and gnashing of teeth.
                     throw new \RuntimeException($error_string . "\nLast statement was: " . end($this->_log));
                 }
                 $this->_log($error_string);
@@ -264,6 +273,47 @@ class Connection implements \Asinius\Datastream
             }
         }
         return true;
+    }
+
+
+    /**
+     * Load all table definitions for the current database. This should be a
+     * bit faster than querying and parsing individual table descriptions when
+     * when multiple tables are involved, but safely caching this information
+     * is tricky because there's no way to know when a query might change a
+     * table schema. So, table definitions are stored until the next search()
+     * or write() function call.
+     *
+     * @throws  \RuntimeException
+     *
+     * @return  mixed
+     */
+    protected function _get_table_definitions ()
+    {
+        $this->ready(true);
+        if ( count($this->_table_definitions) > 0 ) {
+            return $this->_table_definitions;
+        }
+        //  search() and read() are bypassed here so that this function doesn't
+        //  disrupt any active search/read logic.
+        //  First, get the current database.
+        $pdo_statement = $this->_pdo->prepare('SELECT DATABASE() AS `database`');
+        $pdo_statement->execute();
+        $databases = $pdo_statement->fetch(\PDO::FETCH_ASSOC);
+        if ( $databases === false || ! is_array($databases) || count($databases) === 0 ) {
+            throw new \RuntimeException('No databases are currently being used by this connection');
+        }
+        $remove_keys = ['TABLE_CATALOG' => true, 'TABLE_SCHEMA' => true, 'TABLE_NAME' => true, 'COLUMN_NAME' => true];
+        $pdo_statement = $this->_pdo->prepare('SELECT * FROM information_schema.columns WHERE `TABLE_SCHEMA` = ? ORDER BY `TABLE_NAME`, `ORDINAL_POSITION`');
+        $pdo_statement->execute([$databases['database']]);
+        while ( ($column = $pdo_statement->fetch(\PDO::FETCH_ASSOC)) !== false ) {
+            if ( ! array_key_exists($column['TABLE_NAME'], $this->_table_definitions) ) {
+                $this->_table_definitions[$column['TABLE_NAME']] = [];
+            }
+            $column_properties = array_diff_key($column, $remove_keys);
+            $this->_table_definitions[$column['TABLE_NAME']][$column['COLUMN_NAME']] = array_combine(array_map('strtolower', array_keys($column_properties)), array_map('strtolower', array_values($column_properties)));
+        }
+        return $this->_table_definitions;
     }
 
 
@@ -321,17 +371,38 @@ class Connection implements \Asinius\Datastream
      */
     public function table_exists ($table_name)
     {
-        if ( ! is_string($table_name) ) {
-            throw new \RuntimeException("\$table_name must be a string type");
+        if ( count($this->_table_definitions) === 0 ) {
+            $this->_get_table_definitions();
         }
-        $this->ready(true);
-        //  This bypasses all of the nice work done in search() so that a call
-        //  to this function during a search()/read() cycle won't interrupt
-        //  those results.
-        $pdo_statement  = $this->_pdo->prepare('SHOW TABLES LIKE ?');
-        $pdo_statement->execute([$table_name]);
-        $tables = $pdo_statement->fetch(\PDO::FETCH_ASSOC);
-        return $tables !== false;
+        return array_key_exists($table_name, $this->_table_definitions);
+    }
+
+
+    /**
+     * Return the names of tables in the current database.
+     *
+     * @return  array
+     */
+    public function get_tables ()
+    {
+        if ( count($this->_table_definitions) === 0 ) {
+            $this->_get_table_definitions();
+        }
+        return array_keys($this->_table_definitions);
+    }
+
+
+    /**
+     * Return a copy of the internal columns and properties for a table.
+     *
+     * @return  array
+     */
+    public function get_columns ($table)
+    {
+        if ( ! $this->table_exists($table) ) {
+            throw new \RuntimeException("Can't get the columns for this table because it doesn't exist: $table");
+        }
+        return $this->_table_definitions[$table];
     }
 
 
@@ -353,33 +424,17 @@ class Connection implements \Asinius\Datastream
         if ( strlen($table_name) == 0 ) {
             //  Unset the current table.
             $this->_default_table = '';
-            $this->_table_columns = [];
             return true;
         }
         //  A parameterized query can't be used here so the table name needs to
-        //  be validated. This library enforces a stricter character set for
-        //  table names than MySQL does by default.
-        if ( strspn($table_name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_') !== strlen($table_name) ) {
+        //  be validated.
+        if ( strspn($table_name, MYSQL_TABLENAME_CHARS) !== strlen($table_name) ) {
             throw new \RuntimeException("Invalid table name: $table_name. Table names can only contain [A-Za-z0-9_]");
         }
         $this->ready(true);
         if ( ! $this->table_exists($table_name) ) {
             throw new \RuntimeException("Table does not exist in database: $table_name");
         }
-        //  Load the table definition so that array keys can be associated with
-        //  table columns during write() operations. Like table_exists() above,
-        //  this bypasses the usual search()/read() code path so that in-progress
-        //  operations don't get interrupted.
-        //  Unfortunately parameterized queries don't work here, but since the
-        //  table was verified in table_exists(), it's probably -- usually --
-        //  okay to proceed here.
-        $pdo_statement = $this->_pdo->prepare("DESCRIBE `$table_name`");
-        $pdo_statement->execute([]);
-        $columns = [];
-        while ( ($column = $pdo_statement->fetch(\PDO::FETCH_ASSOC)) !== false ) {
-            $columns[$column['Field']] = ['type' => $column['Type'], 'null' => $column['Null'], 'default' => $column['Default'], 'extra' => $column['Extra']];
-        }
-        $this->_table_columns = $columns;
         $this->_default_table = $table_name;
         return true;
     }
@@ -471,6 +526,10 @@ class Connection implements \Asinius\Datastream
         list($statement, $arguments) = $this->_parse_statement_arguments($arguments);
         if ( $this->_last_statement == $statement && $this->_last_arguments === $arguments ) {
             return;
+        }
+        //  Clear the table definition cache unless use_table() has been called.
+        if ( $this->_default_table === '' ) {
+            $this->_table_definitions = [];
         }
         //  New query.
         $this->_log_statement($statement, $arguments);
@@ -568,7 +627,7 @@ class Connection implements \Asinius\Datastream
      */
     public function write ($statement)
     {
-        if ( is_array($statement) && $this->_default_table != '' ) {
+        if ( is_array($statement) && $this->_default_table !== '' ) {
             //  Allow applications to write key-value arrays directly to database
             //  tables after calling use_table().
             //  Make sure all required columns are included and then create a
@@ -577,15 +636,15 @@ class Connection implements \Asinius\Datastream
             //  that's just asking for trouble later. Applications that insist
             //  on using positional data can just call array_combine() before
             //  calling write().
-            foreach ($this->_table_columns as $name => $properties) {
-                if ( strtolower($properties['null']) == 'no' && is_null($properties['default']) && ! array_key_exists($name, $statement) && ! $properties['extra'] == 'auto_increment' ) {
+            foreach ($this->_table_definitions[$this->_default_table] as $name => $properties) {
+                if ( strtolower($properties['is_nullable']) === 'no' && is_null($properties['default']) && ! array_key_exists($name, $statement) && $properties['extra'] !== 'auto_increment' ) {
                     throw new \RuntimeException("Missing required column during write(): $name");
                 }
             }
             //  Silently ignore any keys in the data that don't match a column
             //  in the database. This allows applications to dump a single data
             //  structure into multiple destinations, including this table.
-            $write_columns = array_intersect_key($statement, $this->_table_columns);
+            $write_columns = array_intersect_key($statement, $this->_table_definitions[$this->_default_table]);
             //  Now build the insert/update statement.
             $table = $this->_default_table;
             $column_names = '`' . implode('`, `', array_keys($write_columns)) . '`';
@@ -606,6 +665,8 @@ class Connection implements \Asinius\Datastream
                 throw new \RuntimeException('No arguments?');
             }
             list($statement, $arguments) = $this->_parse_statement_arguments($arguments);
+            //  Clear table definition cache.
+            $this->_table_definitions = [];
         }
         $this->_log_statement($statement, $arguments);
         $this->ready(true);
