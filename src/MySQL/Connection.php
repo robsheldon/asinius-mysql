@@ -311,7 +311,12 @@ class Connection implements \Asinius\Datastream
                 $this->_table_definitions[$column['TABLE_NAME']] = [];
             }
             $column_properties = array_diff_key($column, $remove_keys);
-            $this->_table_definitions[$column['TABLE_NAME']][$column['COLUMN_NAME']] = array_combine(array_map('strtolower', array_keys($column_properties)), array_map('strtolower', array_values($column_properties)));
+            $this->_table_definitions[$column['TABLE_NAME']][$column['COLUMN_NAME']] = array_combine(
+                array_map('strtolower', array_keys($column_properties)),
+                array_map(function($value){
+                    return is_string($value) ? strtolower($value) : $value;
+                }, array_values($column_properties))
+            );
         }
         return $this->_table_definitions;
     }
@@ -637,7 +642,7 @@ class Connection implements \Asinius\Datastream
             //  on using positional data can just call array_combine() before
             //  calling write().
             foreach ($this->_table_definitions[$this->_default_table] as $name => $properties) {
-                if ( strtolower($properties['is_nullable']) === 'no' && is_null($properties['default']) && ! array_key_exists($name, $statement) && $properties['extra'] !== 'auto_increment' ) {
+                if ( strtolower($properties['is_nullable']) === 'no' && $properties['column_default'] === null && ! array_key_exists($name, $statement) && $properties['extra'] !== 'auto_increment' ) {
                     throw new \RuntimeException("Missing required column during write(): $name");
                 }
             }
