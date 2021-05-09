@@ -65,7 +65,7 @@ defined('MYSQL_TABLENAME_CHARS')    or define('MYSQL_TABLENAME_CHARS', 'ABCDEFGH
 class Connection implements \Asinius\Datastream
 {
 
-    protected $_properties          = [];
+    protected $_properties          = ['log_limit' => 100];
     protected $_pdo                 = null;
     protected $_pdo_arguments       = [];
     protected $_pdo_statement       = null;
@@ -89,6 +89,21 @@ class Connection implements \Asinius\Datastream
         if ( count($arguments) > 4 ) {
             throw new \RuntimeException("Bad argument count for \" new" . __CLASS__ . "()'\"");
         }
+        if ( count($arguments) < 2 ) {
+            $arguments[] = null;
+        }
+        if ( count($arguments) < 3 ) {
+            $arguments[] = null;
+        }
+        if ( count($arguments) < 4 ) {
+            $arguments[] = [];
+        }
+        //  Set some default PDO parameters.
+        $arguments[3] = array_merge($arguments[3], [
+            \PDO::ATTR_TIMEOUT      => 2,     //  seconds
+            \PDO::ATTR_ERRMODE      => \PDO::ERRMODE_EXCEPTION,
+            \PDO::ATTR_PERSISTENT   => true,
+        ]);
         $this->_pdo_arguments = $arguments;
         //  Connection gets opened explicitly in open() below.
     }
@@ -129,6 +144,13 @@ class Connection implements \Asinius\Datastream
      */
     public function __set ($property, $value)
     {
+        switch ($property) {
+            case 'log_limit':
+                if ( ! is_int($value) || $value < 0 ) {
+                    throw new \RuntimeException('log_limit must be an integer greater than or equal to 0');
+                }
+                break;
+        }
         $this->_properties[$property] = $value;
     }
 
@@ -174,14 +196,14 @@ class Connection implements \Asinius\Datastream
     protected function _log ($line, $destination = null)
     {
         if ( is_null($destination) ) {
-            $this->_log[] = $line;
-            if ( array_key_exists('log_limit', $this->_properties) && is_int($this->_properties['log_limit']) ) {
-                if ( $this->_properties['log_limit'] < 1 ) {
-                    $this->_log = [];
+            if ( $this->_properties['log_limit'] === 1 ) {
+                $this->_log = [$line];
+            }
+            else {
+                if ( ($n = count($this->_log)) >= $this->_properties['log_limit'] ) {
+                    array_splice($this->_log, 0, $n - $this->_properties['log_limit'] + 1);
                 }
-                else {
-                    array_splice($this->_log, 0, count($this->_log) - $this->_properties['log_limit']);
-                }
+                $this->_log[] = $line;
             }
             $destinations = $this->_log_interfaces;
         }
