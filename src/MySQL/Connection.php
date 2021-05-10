@@ -533,6 +533,7 @@ class Connection implements \Asinius\Datastream
         $this->_last_arguments = [];
         $this->_pdo_results    = [];
         $this->_pdo_result_idx = 0;
+        $this->_pdo_statement  = null;
     }
 
 
